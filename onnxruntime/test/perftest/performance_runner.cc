@@ -28,13 +28,18 @@ using onnxruntime::Status;
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-using DefaultThreadPoolType = Eigen::ThreadPool;
+#include <core/platform/thread_pool_interface.h>
+#include <core/platform/EigenNonBlockingThreadPool.h>
+
+using DefaultThreadPoolType = onnxruntime::ThreadPoolTempl<onnxruntime::Env>;
 static std::unique_ptr<DefaultThreadPoolType> default_pool;
 static std::once_flag default_pool_init;
-Eigen::ThreadPoolInterface* GetDefaultThreadPool(const onnxruntime::Env& env) {
+static onnxruntime::ThreadOptions to;
+
+onnxruntime::ThreadPoolInterface* GetDefaultThreadPool(const onnxruntime::Env& env) {
   std::call_once(default_pool_init, [&env] {
     int core_num = env.GetNumCpuCores();
-    default_pool.reset(new DefaultThreadPoolType(core_num));
+    default_pool = onnxruntime::make_unique<DefaultThreadPoolType>(ORT_TSTR("test_runner"), core_num, false, onnxruntime::Env::Default(),to);
   });
   return default_pool.get();
 }
@@ -139,7 +144,7 @@ Status PerformanceRunner::ForkJoinRepeat() {
   const auto& run_config = performance_test_config_.run_config;
 
   // create a threadpool with one thread per concurrent request
-  auto tpool = onnxruntime::make_unique<DefaultThreadPoolType>(run_config.concurrent_session_runs);
+  auto tpool = onnxruntime::make_unique<DefaultThreadPoolType>(ORT_TSTR("test_runner"), run_config.concurrent_session_runs, false, onnxruntime::Env::Default(),to);
   std::atomic<int> counter{0}, requests{0};
   std::mutex m;
   std::condition_variable cv;
