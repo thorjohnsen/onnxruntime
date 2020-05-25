@@ -20,6 +20,11 @@
 #include "heap_buffer.h"
 #include "test_session.h"
 #include "OrtValueList.h"
+#include "loadgen.h"
+#include "test_settings.h"
+#include "query_sample.h"
+#include "system_under_test.h"
+#include "query_sample_library.h"
 
 class ITestCase;
 class TestModelInfo;
@@ -27,6 +32,23 @@ class TestModelInfo;
 namespace onnxruntime {
 namespace perftest {
 
+class SampleLoader : public mlperf::QuerySampleLibrary {
+ private:
+  ITestCase* test_case_;
+
+ public:
+  explicit SampleLoader(ITestCase* test_case);
+
+  const std::string& Name() const override;
+
+  size_t TotalSampleCount() override;
+
+  size_t PerformanceSampleCount() override;
+
+  void LoadSamplesToRam(const std::vector<mlperf::QuerySampleIndex>& samples) override;
+
+  void UnloadSamplesFromRam(const std::vector<mlperf::QuerySampleIndex>& samples) override;
+};
 struct PerformanceResult {
   std::chrono::time_point<std::chrono::high_resolution_clock> start_;
   std::chrono::time_point<std::chrono::high_resolution_clock> end_;
@@ -45,7 +67,8 @@ struct PerformanceResult {
     }
 
     for (size_t runs = 0; runs < time_costs.size(); runs++) {
-      outfile << model_name << "," << time_costs[runs] << "," << peak_workingset_size << "," << average_CPU_usage << "," << runs << std::endl;
+      outfile << model_name << "," << time_costs[runs] << "," << peak_workingset_size << "," << average_CPU_usage << ","
+              << runs << std::endl;
     }
 
     if (!time_costs.empty() && f_include_statistics) {
@@ -86,7 +109,9 @@ class PerformanceRunner {
   ~PerformanceRunner();
   Status Run();
 
-  inline const PerformanceResult& GetResult() const { return performance_result_; }
+  inline const PerformanceResult& GetResult() const {
+    return performance_result_;
+  }
 
   inline void SerializeResult() const {
     performance_result_.DumpToFile(performance_test_config_.model_info.result_file_path,

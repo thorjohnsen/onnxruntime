@@ -668,6 +668,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Android")
     endif()
 endif()
 
+
 #perf test runner
 set(onnxruntime_perf_test_src_dir ${TEST_SRC_DIR}/perftest)
 set(onnxruntime_perf_test_src_patterns
@@ -694,7 +695,7 @@ if(MSVC)
 endif()
 target_include_directories(onnxruntime_perf_test PRIVATE ${onnx_test_runner_src_dir} ${ONNXRUNTIME_ROOT}
         ${eigen_INCLUDE_DIRS} ${onnxruntime_graph_header} ${onnxruntime_exec_src_dir}
-        ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/onnx)
+        ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/onnx ${PROJECT_SOURCE_DIR}/external/loadgen)
 if (WIN32)
   target_compile_options(onnxruntime_perf_test PRIVATE ${disabled_warnings})
   if (NOT DEFINED SYS_PATH_LIB)
@@ -712,7 +713,7 @@ if (onnxruntime_BUILD_SHARED_LIB)
   if (CMAKE_SYSTEM_NAME STREQUAL "Android")
     list(APPEND onnxruntime_perf_test_libs ${android_shared_libs})
   endif()
-  target_link_libraries(onnxruntime_perf_test PRIVATE ${onnxruntime_perf_test_libs} Threads::Threads)
+  target_link_libraries(onnxruntime_perf_test PRIVATE ${onnxruntime_perf_test_libs} mlperf_loadgen Threads::Threads)
   if(WIN32)
     target_link_libraries(onnxruntime_perf_test PRIVATE debug dbghelp advapi32)
   endif()
@@ -723,7 +724,8 @@ if (onnxruntime_BUILD_SHARED_LIB)
     target_compile_definitions(onnxruntime_perf_test PRIVATE HAVE_TENSORFLOW)
   endif()
 else()
-  target_link_libraries(onnxruntime_perf_test PRIVATE onnx_test_runner_common ${GETOPT_LIB_WIDE} ${onnx_test_libs})
+  target_link_libraries(onnxruntime_perf_test PRIVATE onnx_test_runner_common ${GETOPT_LIB_WIDE} mlperf_loadgen
+          ${onnx_test_libs})
 endif()
 set_target_properties(onnxruntime_perf_test PROPERTIES FOLDER "ONNXRuntimeTest")
 

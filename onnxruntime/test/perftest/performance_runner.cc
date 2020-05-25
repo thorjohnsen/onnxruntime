@@ -31,6 +31,7 @@ using onnxruntime::Status;
 #include <core/platform/thread_pool_interface.h>
 #include <core/platform/EigenNonBlockingThreadPool.h>
 
+
 using DefaultThreadPoolType = onnxruntime::ThreadPoolTempl<onnxruntime::Env>;
 static std::unique_ptr<DefaultThreadPoolType> default_pool;
 static std::once_flag default_pool_init;
@@ -183,6 +184,8 @@ static TestModelInfo* CreateModelInfo(const PerformanceTestConfig& performance_t
   ORT_NOT_IMPLEMENTED(ToMBString(performance_test_config_.backend), " is not supported");
 }
 
+
+
 static TestSession* CreateSession(Ort::Env& env, std::random_device& rd,
                                   const PerformanceTestConfig& performance_test_config_,
                                   TestModelInfo* test_model_info) {
@@ -205,6 +208,47 @@ PerformanceRunner::PerformanceRunner(Ort::Env& env, const PerformanceTestConfig&
 }
 
 PerformanceRunner::~PerformanceRunner() = default;
+
+ class OrtSystemUnderTest: public mlperf::SystemUnderTest {
+  private:
+   const std::string name_  = "onnxruntime";
+ public:
+
+  /// \brief A human-readable string for logging purposes.
+  const std::string& Name() const override {
+    return name_;
+  }
+
+  /// \brief Lets the loadgen issue N samples to the SUT.
+  /// \details The SUT may either a) return immediately and signal completion
+  /// at a later time on another thread or b) it may block and signal
+  /// completion on the current stack. The load generator will handle both
+  /// cases properly.
+  /// Note: The data for neighboring samples may or may not be contiguous
+  /// depending on the scenario.
+  void IssueQuery(const std::vector<mlperf::QuerySample>& samples) override {
+    abort();
+  }
+
+  /// \brief Called immediately after the last call to IssueQuery
+  /// in a series is made.
+  /// \details This doesn't necessarily signify the end of the
+  /// test since there may be multiple series involved during a test; for
+  /// example in accuracy mode.
+  /// Clients can use this to flush any deferred queries immediately, rather
+  /// than waiting for some timeout.
+  /// This is especially useful in the server scenario.
+  void FlushQueries() {
+    abort();
+  }
+
+  /// \brief Reports the raw latency results to the SUT of each sample issued as
+  /// recorded by the load generator. Units are nanoseconds.
+  void ReportLatencyResults(
+      const std::vector<mlperf::QuerySampleLatency>& latencies_ns) {
+    abort();
+  }
+};
 
 bool PerformanceRunner::Initialize() {
   std::basic_string<PATH_CHAR_TYPE> test_case_dir;
@@ -249,11 +293,35 @@ bool PerformanceRunner::Initialize() {
       session_->PreLoadTestData(test_data_id, static_cast<size_t>(i), iter->second);
     }
   }
-  test_case_.reset(nullptr);
+  SampleLoader s(test_case_.get());
+  OrtSystemUnderTest sut;
+  mlperf::TestSettings test_settings;
+  mlperf::LogSettings log_settings;
+  mlperf::StartTest(&sut,&s,test_settings,log_settings);
+  //test_case_.reset(nullptr);
   test_model_info_ = nullptr;
   return true;
 }
 
+const std::string &SampleLoader::Name() const {
+  return test_case_->GetTestCaseName();
+}
+size_t SampleLoader::TotalSampleCount() {
+  return test_case_->GetDataCount();
+}
+size_t SampleLoader::PerformanceSampleCount() {
+  return test_case_->GetDataCount();
+}
+void SampleLoader::LoadSamplesToRam(const std::vector<mlperf::QuerySampleIndex> &samples) {
+
+}
+void SampleLoader::UnloadSamplesFromRam(const std::vector<mlperf::QuerySampleIndex> &samples) {
+
+}
+
+SampleLoader::SampleLoader(ITestCase* test_case):test_case_(test_case){
+
+}
 }  // namespace perftest
 
 }  // namespace onnxruntime
