@@ -41,6 +41,7 @@ class ONNX_OPERATOR_KERNEL_CLASS_NAME(kCpuExecutionProvider, kMSDomain, 1, BiasG
 class ONNX_OPERATOR_KERNEL_CLASS_NAME(kCpuExecutionProvider, kMSDomain, 1, FastGelu);
 class ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME( kCpuExecutionProvider, kMSDomain, 1, float_uint8_t_uint8_t, QAttention );
 class ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME( kCpuExecutionProvider, kMSDomain, 1, float_uint8_t_int8_t, QAttention );
+class ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME( kCpuExecutionProvider, kMSDomain, 1, float, MegaFusion);
 
 // This section includes all op kernel declarations for former experimental ops which have now been removed from onnx.
 // To maintain backward compatibility these are added as contrib ops.
@@ -122,6 +123,7 @@ Status RegisterCpuContribKernels(KernelRegistry& kernel_registry) {
       BuildKernelCreateInfo<ONNX_OPERATOR_KERNEL_CLASS_NAME(kCpuExecutionProvider, kMSDomain, 1, FastGelu)>,
       BuildKernelCreateInfo<ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME( kCpuExecutionProvider, kMSDomain, 1, float_uint8_t_uint8_t, QAttention )>,
       BuildKernelCreateInfo<ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME( kCpuExecutionProvider, kMSDomain, 1, float_uint8_t_int8_t, QAttention )>,
+      BuildKernelCreateInfo<ONNX_OPERATOR_TYPED_KERNEL_CLASS_NAME(kCpuExecutionProvider, kMSDomain, 1, float, MegaFusion)>,
       // These ops were experimental ops in onnx domain which have been removed now. We add them here as
       // contrib ops to main backward compatibility
       BuildKernelCreateInfo<ONNX_OPERATOR_KERNEL_CLASS_NAME(kCpuExecutionProvider, kOnnxDomain, 1, Affine)>,

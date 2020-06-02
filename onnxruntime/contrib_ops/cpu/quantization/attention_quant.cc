@@ -11,6 +11,12 @@
 #include "core/platform/threadpool.h"
 #include "core/mlas/inc/mlas.h"
 
+
+#include "core/providers/cpu/math/matmul_helper.h"
+#include "core/util/qmath.h"
+#include "core/providers/common.h"
+
+
 using onnxruntime::concurrency::ThreadPool;
 
 namespace onnxruntime {
@@ -110,8 +116,12 @@ Status QAttention<T, QInput, QWeight>::Compute(OpKernelContext* context) const {
   auto V = K + batch_size * sequence_length * hidden_size;
   T* QKV[3] = {Q, K, V};
 
+#if 0
   auto gemm_data_quant = allocator->Alloc(SafeInt<size_t>(batch_size) * sequence_length * 3 * hidden_size * sizeof(int32_t));
   BufferUniquePtr gemm_buffer_quant(gemm_data_quant, BufferDeleter(allocator));
+#else
+  auto gemm_data_quant = gemm_data; // inplace
+#endif
 
   auto Q_quant = reinterpret_cast<int32_t*>(gemm_data_quant);
   auto K_quant = Q_quant + batch_size * sequence_length * hidden_size;
@@ -134,9 +144,32 @@ Status QAttention<T, QInput, QWeight>::Compute(OpKernelContext* context) const {
 
         int input_offset = batch_index * sequence_length * hidden_size;
         int weights_offset = qkv_index * hidden_size + head_index * head_size;
-        int32_t* qkv_dest = QKV_quant[qkv_index];
+//        int32_t* qkv_dest = QKV_quant[qkv_index];
         int qkv_offset = (batch_index * num_heads_ + head_index) * (sequence_length * head_size);
 
+        float* qkv_dest_fp32 = QKV[qkv_index];
+
+        MLAS_GEMM_U8X8_PARAMETERS gemm_parameters = { };
+
+        gemm_parameters.M = sequence_length;
+        gemm_parameters.N = head_size;
+        gemm_parameters.K = hidden_size;
+        gemm_parameters.A = input_data + input_offset;
+        gemm_parameters.lda = hidden_size;
+        gemm_parameters.offa = input_zero_point;
+        gemm_parameters.B = (const uint8_t*)weights_data + weights_offset;
+        gemm_parameters.ldb = 3 * hidden_size;
+        gemm_parameters.offb = weight_zero_point;
+        gemm_parameters.BTypeIsSigned = std::is_signed<QWeight>::value;
+        gemm_parameters.C = (int32_t*)qkv_dest_fp32 + qkv_offset;
+        gemm_parameters.ldc = head_size;
+        gemm_parameters.CTypeIsFloat = true;
+        gemm_parameters.Multiplier = &dequant_scale;
+        gemm_parameters.Bias = bias_data + weights_offset;
+
+        MlasGemm(&gemm_parameters, nullptr);
+
+#if 0
         //                   original           transposed            iteration
         // A: input          (BxSxNxH)          (B.)S x NH            S x NH
         // B: weights        (NxHx3xNxH)        NH  x (3.N.)H         NH x H
@@ -154,16 +187,18 @@ Status QAttention<T, QInput, QWeight>::Compute(OpKernelContext* context) const {
               head_size,                      // ldc
               nullptr                         // use single-thread
               );
+#endif
 
         // dequantize and add bias
         // broadcast 3NH -> (3.B.N.S.H)
         const T* bias_src = bias_data + weights_offset;
-        int32_t* gemm_quant_src = QKV_quant[qkv_index] + qkv_offset;
+//        int32_t* gemm_quant_src = QKV_quant[qkv_index] + qkv_offset;
         T* data_dest = QKV[qkv_index] + qkv_offset;
         for (int seq_index = 0; seq_index < sequence_length; seq_index++) {
           for (int head_idx = 0; head_idx < head_size; head_idx++) {
-            *data_dest++ = *gemm_quant_src++ * dequant_scale + bias_src[head_idx];
+            data_dest[head_idx] = data_dest[head_idx] + bias_src[head_idx];
           }
+          data_dest += head_size;
         }
       }
     });
@@ -206,6 +241,104 @@ Status QAttention<T, QInput, QWeight>::Compute(OpKernelContext* context) const {
 
   return Status::OK();
 }
+
+template <typename T1, typename T2>
+class MegaFusion final : public OpKernel {
+ public:
+  MegaFusion(const OpKernelInfo& info) : OpKernel(info) {
+    has_a_zero_point_ = false;
+    has_b_zero_point_ = false;
+    if (info.GetInputCount() > 2) {
+      has_a_zero_point_ = true;
+    }
+    if (info.GetInputCount() > 3) {
+      has_b_zero_point_ = true;
+    }
+  }
+
+  Status Compute(OpKernelContext* context) const override;
+
+ private:
+  bool has_a_zero_point_;
+  bool has_b_zero_point_;
+};
+
+template <typename T1, typename T2>
+Status MegaFusion<T1, T2>::Compute(OpKernelContext* ctx) const {
+  concurrency::ThreadPool* thread_pool = ctx->GetOperatorThreadPool();
+
+  auto a = ctx->Input<Tensor>(0);
+  auto b = ctx->Input<Tensor>(1);
+  ORT_ENFORCE(a != nullptr && b != nullptr);
+
+  MatMulComputeHelper helper;
+  ORT_RETURN_IF_ERROR(helper.Compute(a->Shape(), b->Shape()));
+  Tensor* y = ctx->Output(0, helper.OutputShape());
+
+  // validate zero points
+  T1 a_offset = 0;
+  T2 b_offset = 0;
+  if (has_a_zero_point_) {
+    auto a_zero_point = ctx->Input<Tensor>(2);
+    ORT_ENFORCE(IsScalarOr1ElementVector(a_zero_point),
+                "MatmulInteger : input1 zero point must be a scalar or 1D tensor of size 1");
+    a_offset = *a_zero_point->template Data<T1>();
+  }
+  if (has_b_zero_point_) {
+    auto b_zero_point = ctx->Input<Tensor>(3);
+    ORT_ENFORCE(IsScalarOr1ElementVector(b_zero_point),
+                "MatmulInteger : input2 zero point must be a scalar or 1D tensor of size 1");
+    b_offset = *b_zero_point->template Data<T2>();
+  }
+
+  auto* multiplier = ctx->Input<Tensor>(4);
+
+  for (size_t i = 0; i < helper.OutputOffsets().size(); i++) {
+
+#if 1
+    MLAS_GEMM_U8X8_PARAMETERS gemm_parameters = { };
+
+//    float dequant_scale = 1.0f;
+
+    gemm_parameters.M = static_cast<int>(helper.M());
+    gemm_parameters.N = static_cast<int>(helper.N());
+    gemm_parameters.K = static_cast<int>(helper.K());
+    gemm_parameters.A = a->template Data<T1>() + helper.LeftOffsets()[i];
+    gemm_parameters.lda = static_cast<int>(helper.K());
+    gemm_parameters.offa = a_offset;
+    gemm_parameters.B = (const uint8_t*)b->template Data<T2>() + helper.RightOffsets()[i];
+    gemm_parameters.ldb = static_cast<int>(helper.N());
+    gemm_parameters.offb = b_offset;
+    gemm_parameters.BTypeIsSigned = true;
+    gemm_parameters.C = (int32_t*)y->template MutableData<float>() + helper.OutputOffsets()[i];
+    gemm_parameters.ldc = static_cast<int>(helper.N());
+    gemm_parameters.CTypeIsFloat = true;
+    gemm_parameters.Multiplier = multiplier->template Data<float>();
+    gemm_parameters.Bias = nullptr;
+
+    MlasGemm(&gemm_parameters, thread_pool);
+#else
+
+    QGemm(static_cast<int>(helper.M()),
+          static_cast<int>(helper.N()),
+          static_cast<int>(helper.K()),
+          a->template Data<T1>() + helper.LeftOffsets()[i],
+          static_cast<int>(helper.K()),
+          a_offset,
+          b->template Data<T2>() + helper.RightOffsets()[i],
+          static_cast<int>(helper.N()),
+          b_offset,
+          y->template MutableData<int32_t>() + helper.OutputOffsets()[i],
+          static_cast<int>(helper.N()),
+          thread_pool);
+#endif
+  }
+  return Status::OK();
+}
+
+ONNX_OPERATOR_TYPED_KERNEL_EX(MegaFusion, kMSDomain, 1, float, kCpuExecutionProvider,
+                              KernelDefBuilder().TypeConstraint("T1", DataTypeImpl::GetTensorType<uint8_t>()).TypeConstraint("T2", DataTypeImpl::GetTensorType<int8_t>()),
+                              MegaFusion<uint8_t, int8_t>);
 
 }  // namespace contrib
 }  // namespace onnxruntime

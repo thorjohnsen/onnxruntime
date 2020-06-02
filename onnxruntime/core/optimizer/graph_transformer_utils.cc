@@ -29,6 +29,7 @@
 #include "core/optimizer/attention_fusion.h"
 #include "core/optimizer/expand_elimination.h"
 #include "core/optimizer/cast_elimination.h"
+#include "core/optimizer/matmul_float_fusion.h"
 #include "core/mlas/inc/mlas.h"
 
 namespace onnxruntime {
@@ -150,6 +151,8 @@ std::vector<std::unique_ptr<GraphTransformer>> GenerateTransformers(TransformerL
       if (MlasNchwcGetBlockSize() > 1) {
         transformers.emplace_back(onnxruntime::make_unique<NchwcTransformer>());
       }
+      transformers.emplace_back(onnxruntime::make_unique<MatMulFloatFusion>());
+
 #endif
     } break;
 

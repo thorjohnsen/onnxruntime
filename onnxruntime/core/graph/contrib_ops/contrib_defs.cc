@@ -314,6 +314,63 @@ mask_index shall not be provided.)DOC";
       .TypeConstraint("M", {"tensor(int32)"}, "Constrain mask index to integer types")
       .TypeAndShapeInferenceFunction(ONNX_NAMESPACE::propagateShapeAndTypeFromFirstInput);
 
+  ONNX_CONTRIB_OPERATOR_SCHEMA(MegaFusion)
+      .SetDomain(kMSDomain)
+      .SinceVersion(1)
+      .Input(0, "A", "N-dimensional matrix A", "T1")
+      .Input(1, "B", "N-dimensional matrix B", "T2")
+      .Input(
+          2,
+          "a_zero_point",
+          "Zero point tensor for input 'A'. It's optional and default value is 0. It could be a scalar or a 1-D tensor, "
+          "which means a per-tensor or per-row quantization. If it's a 1-D tensor, its number of elements "
+          "should be equal to the number of rows of input 'A'.",
+          "T1",
+          OpSchema::Optional)
+      .Input(
+          3,
+          "b_zero_point",
+          "Zero point tensor for input 'B'. It's optional and default value is 0.  It could be a scalar or a 1-D tensor, "
+          "which means a per-tensor or per-column quantization. If it's a 1-D tensor, its number "
+          "of elements should be equal to the number of columns of input 'B'.",
+          "T2",
+          OpSchema::Optional)
+      .Input(
+          4,
+          "output_scale",
+          "blah blah",
+          "T3",
+          OpSchema::Optional)
+      .Output(0, "Y", "Matrix multiply results from A * B", "T3")
+      .TypeConstraint(
+          "T1",
+          {"tensor(int8)", "tensor(uint8)"},
+          "Constrain input A data type to 8-bit integer tensor.")
+      .TypeConstraint(
+          "T2",
+          {"tensor(int8)", "tensor(uint8)"},
+          "Constrain input B data type to 8-bit integer tensor.")
+      .TypeConstraint(
+          "T3",
+          {"tensor(float)"},
+          "Constrain output Y data type as 32-bit integer tensor.")
+      .TypeAndShapeInferenceFunction([](ONNX_NAMESPACE::InferenceContext&
+                                            ctx) {
+        auto a_type = ctx.getInputType(0);
+        auto b_type = ctx.getInputType(1);
+        auto y_type = ctx.getOutputType(0);
+        if (nullptr == a_type || nullptr == b_type || nullptr == y_type ||
+            a_type->value_case() != ONNX_NAMESPACE::TypeProto::kTensorType ||
+            b_type->value_case() != ONNX_NAMESPACE::TypeProto::kTensorType) {
+          fail_type_inference(
+              "inputs are expected to have tensor type and output type should not be null.");
+        }
+
+        y_type->mutable_tensor_type()->set_elem_type(ONNX_NAMESPACE::TensorProto::FLOAT);
+
+        ONNX_NAMESPACE::matmulShapeInference(ctx, 0, 1);
+      });
+
   ONNX_CONTRIB_OPERATOR_SCHEMA(QAttention)
       .SetDomain(kMSDomain)
       .SinceVersion(1)
@@ -1617,7 +1674,7 @@ Matrix product that behaves like numpy.matmul: https://docs.scipy.org/doc/numpy-
         // Right now we only support int32
         y_type->mutable_tensor_type()->set_elem_type(ONNX_NAMESPACE::TensorProto::INT32);
 
-        matmulShapeInference(ctx, 0, 1);
+        ONNX_NAMESPACE::matmulShapeInference(ctx, 0, 1);
       });
 
   static const char* TransposeMatMul_doc = R"DOC(

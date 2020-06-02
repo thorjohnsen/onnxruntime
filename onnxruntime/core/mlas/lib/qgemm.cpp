@@ -22,22 +22,10 @@ Abstract:
 // threads.
 //
 
-struct MLAS_GEMM_U8X8_WORK_BLOCK
-{
+struct MLAS_GEMM_U8X8_WORK_BLOCK {
     int32_t ThreadCountM;
     int32_t ThreadCountN;
-    size_t M;
-    size_t N;
-    size_t K;
-    const uint8_t* A;
-    size_t lda;
-    const uint8_t* B;
-    size_t ldb;
-    int32_t* C;
-    size_t ldc;
-    int16_t offa;
-    int16_t offb;
-    bool BTypeIsSigned;
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters;
 };
 
 #ifdef MLAS_TARGET_AMD64_IX86
@@ -46,9 +34,9 @@ struct MLAS_GEMM_U8X8_WORK_BLOCK
 // Define the default strides to step through slices of the input matrices.
 //
 
-#define MLAS_GEMM_U8X8_STRIDEM_SSE          12
-#define MLAS_GEMM_U8X8_STRIDEN_SSE          128
-#define MLAS_GEMM_U8X8_STRIDEK_SSE          128
+#define MLAS_GEMM_U8X8_STRIDEM_SSE                  12
+#define MLAS_GEMM_U8X8_STRIDEN_SSE                  128
+#define MLAS_GEMM_U8X8_STRIDEK_SSE                  128
 
 void
 MlasGemmU8X8CopyPackASse(
@@ -181,48 +169,39 @@ Return Value:
     }
 }
 
-template<typename BType>
 void
 MlasGemmU8X8CopyPackBProcessSse(
     int16_t* D,
     __m128i BytesRow0,
     __m128i BytesRow1,
-    __m128i ZeroVector,
+    __m128i BitFlipVector,
     __m128i ColumnSums[2]
     )
 {
     __m128i BytesInterleaved = _mm_unpacklo_epi8(BytesRow0, BytesRow1);
-    __m128i WordsInterleaved[2];
 
-    //
-    // Zero or sign extend the bytes to words.
-    //
+    BytesInterleaved = _mm_xor_si128(BytesInterleaved, BitFlipVector);
 
-    if (std::is_same<BType, uint8_t>::value) {
-        WordsInterleaved[0] = _mm_unpacklo_epi8(BytesInterleaved, ZeroVector);
-        WordsInterleaved[1] = _mm_unpackhi_epi8(BytesInterleaved, ZeroVector);
-    } else {
-        WordsInterleaved[0] = _mm_srai_epi16(_mm_unpacklo_epi8(BytesInterleaved, BytesInterleaved), 8);
-        WordsInterleaved[1] = _mm_srai_epi16(_mm_unpackhi_epi8(BytesInterleaved, BytesInterleaved), 8);
-    }
+    __m128i WordsInterleaved0 = _mm_srai_epi16(_mm_unpacklo_epi8(BytesInterleaved, BytesInterleaved), 8);
+    __m128i WordsInterleaved1 = _mm_srai_epi16(_mm_unpackhi_epi8(BytesInterleaved, BytesInterleaved), 8);
 
-    ColumnSums[0] = _mm_add_epi16(ColumnSums[0], WordsInterleaved[0]);
-    ColumnSums[1] = _mm_add_epi16(ColumnSums[1], WordsInterleaved[1]);
+    ColumnSums[0] = _mm_add_epi16(ColumnSums[0], WordsInterleaved0);
+    ColumnSums[1] = _mm_add_epi16(ColumnSums[1], WordsInterleaved1);
 
-    _mm_storeu_si128((__m128i*)&D[0], WordsInterleaved[0]);
-    _mm_storeu_si128((__m128i*)&D[8], WordsInterleaved[1]);
+    _mm_storeu_si128((__m128i*)&D[0], WordsInterleaved0);
+    _mm_storeu_si128((__m128i*)&D[8], WordsInterleaved1);
 }
 
-template<typename BType>
 void
 MlasGemmU8X8CopyPackBSse(
     int16_t* D,
-    const BType* B,
+    const uint8_t* B,
     size_t ldb,
     size_t CountN,
     size_t CountK,
     int32_t* ColumnSumVector,
-    int16_t offa
+    int16_t offa,
+    bool BTypeIsSigned
     )
 /*++
 
@@ -256,9 +235,8 @@ Return Value:
 
 --*/
 {
-    const __m128i ZeroVector = _mm_setzero_si128();
     const __m128i OffsetBroadcast = _mm_set1_epi16(offa);
-    BType PaddedMatrixBData[16] = { 0 };
+    const __m128i BitFlipVector = _mm_set1_epi32(BTypeIsSigned ? 0 : 0x80808080);
 
     //
     // Process 8 columns of matrix B in a loop.
@@ -266,12 +244,12 @@ Return Value:
 
     while (CountN >= 8) {
 
-        const BType* b = B;
+        const uint8_t* b = B;
         size_t k = CountK;
         __m128i ColumnSums[2];
 
-        ColumnSums[0] = ZeroVector;
-        ColumnSums[1] = ZeroVector;
+        ColumnSums[0] = _mm_setzero_si128();
+        ColumnSums[1] = _mm_setzero_si128();
 
         //
         // Interleave rows of matrix B and write to the packed buffer.
@@ -286,7 +264,7 @@ Return Value:
             __m128i BytesRow0 = _mm_loadl_epi64((__m128i*)&b[0]);
             __m128i BytesRow1 = _mm_loadl_epi64((__m128i*)&b[ldb]);
 
-            MlasGemmU8X8CopyPackBProcessSse<BType>(D, BytesRow0, BytesRow1, ZeroVector, ColumnSums);
+            MlasGemmU8X8CopyPackBProcessSse(D, BytesRow0, BytesRow1, BitFlipVector, ColumnSums);
 
             b += ldb * 2;
             D += 16;
@@ -297,7 +275,7 @@ Return Value:
 
             __m128i BytesRow0 = _mm_loadl_epi64((__m128i*)&b[0]);
 
-            MlasGemmU8X8CopyPackBProcessSse<BType>(D, BytesRow0, ZeroVector, ZeroVector, ColumnSums);
+            MlasGemmU8X8CopyPackBProcessSse(D, BytesRow0, BitFlipVector, BitFlipVector, ColumnSums);
 
             D += 16;
         }
@@ -325,12 +303,15 @@ Return Value:
 
     if (CountN > 0) {
 
-        const BType* b = B;
+        const uint8_t* b = B;
         size_t k = CountK;
         __m128i ColumnSums[2];
+        uint8_t PaddedMatrixBData[16];
 
-        ColumnSums[0] = ZeroVector;
-        ColumnSums[1] = ZeroVector;
+        _mm_storeu_si128((__m128i*)PaddedMatrixBData, BitFlipVector);
+
+        ColumnSums[0] = _mm_setzero_si128();
+        ColumnSums[1] = _mm_setzero_si128();
 
         //
         // Interleave rows of matrix B using an intermediate zero padded stack
@@ -339,9 +320,9 @@ Return Value:
 
         while (k >= 2) {
 
-            const BType* bcopy = b;
-            BType* padded = PaddedMatrixBData;
-            BType* padded_end = padded + CountN;
+            const uint8_t* bcopy = b;
+            uint8_t* padded = PaddedMatrixBData;
+            uint8_t* padded_end = padded + CountN;
 
             do {
                 padded[0] = bcopy[0];
@@ -353,7 +334,7 @@ Return Value:
             __m128i BytesRow0 = _mm_loadl_epi64((__m128i*)&PaddedMatrixBData[0]);
             __m128i BytesRow1 = _mm_loadl_epi64((__m128i*)&PaddedMatrixBData[8]);
 
-            MlasGemmU8X8CopyPackBProcessSse<BType>(D, BytesRow0, BytesRow1, ZeroVector, ColumnSums);
+            MlasGemmU8X8CopyPackBProcessSse(D, BytesRow0, BytesRow1, BitFlipVector, ColumnSums);
 
             b += ldb * 2;
             D += 16;
@@ -362,9 +343,9 @@ Return Value:
 
         if (k > 0) {
 
-            const BType* bcopy = b;
-            BType* padded = PaddedMatrixBData;
-            BType* padded_end = padded + CountN;
+            const uint8_t* bcopy = b;
+            uint8_t* padded = PaddedMatrixBData;
+            uint8_t* padded_end = padded + CountN;
 
             do {
                 padded[0] = bcopy[0];
@@ -374,7 +355,7 @@ Return Value:
 
             __m128i BytesRow0 = _mm_loadl_epi64((__m128i*)&PaddedMatrixBData[0]);
 
-            MlasGemmU8X8CopyPackBProcessSse<BType>(D, BytesRow0, ZeroVector, ZeroVector, ColumnSums);
+            MlasGemmU8X8CopyPackBProcessSse(D, BytesRow0, BitFlipVector, BitFlipVector, ColumnSums);
         }
 
         //
@@ -585,18 +566,12 @@ Return Value:
 void
 MLASCALL
 MlasGemmU8X8OperationSse(
-    const MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock,
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
     size_t M,
     size_t N,
-    size_t K,
     const uint8_t* A,
-    size_t lda,
-    int16_t offa,
     const uint8_t* B,
-    size_t ldb,
-    int16_t offb,
-    int32_t* C,
-    size_t ldc
+    int32_t* C
     )
 /*++
 
@@ -607,7 +582,7 @@ Routine Description:
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
 
     M - Supplies the number of rows of matrix A and matrix C.
 
@@ -618,19 +593,9 @@ Arguments:
 
     A - Supplies the address of matrix A.
 
-    lda - Supplies the first dimension of matrix A.
-
-    offa - Supplies the zero point offset of matrix A.
-
     B - Supplies the address of matrix B.
 
-    ldb - Supplies the first dimension of matrix B.
-
-    offb - Supplies the zero point offset of matrix B.
-
     C - Supplies the address of matrix C.
-
-    ldc - Supplies the first dimension of matrix C.
 
 Return Value:
 
@@ -644,9 +609,22 @@ Return Value:
     MLAS_DECLSPEC_ALIGN(int32_t RowSumVector[MLAS_GEMM_U8X8_STRIDEM_SSE], 16);
     MLAS_DECLSPEC_ALIGN(int32_t ColumnSumVector[MLAS_GEMM_U8X8_STRIDEN_SSE], 16);
 
+    const size_t K = Parameters->K;
+
+    int16_t offa = Parameters->offa;
+    int16_t offb = int8_t(Parameters->offb);
+
+    const size_t lda = Parameters->lda;
+    const size_t ldb = Parameters->ldb;
+    const size_t ldc = Parameters->ldc;
+
     size_t StrideM = MLAS_GEMM_U8X8_STRIDEM_SSE;
     size_t StrideN = MLAS_GEMM_U8X8_STRIDEN_SSE;
     size_t StrideK = MLAS_GEMM_U8X8_STRIDEK_SSE;
+
+    if (!Parameters->BTypeIsSigned) {
+        offb = int8_t(offb ^ 0x80);
+    }
 
     //
     // Step through each slice of matrix B along the K dimension.
@@ -674,13 +652,8 @@ Return Value:
 
             const uint8_t* b = B + n + k * ldb;
 
-            if (WorkBlock->BTypeIsSigned) {
-                MlasGemmU8X8CopyPackBSse(PanelB, (const int8_t*)b, ldb, CountN,
-                    CountK, ColumnSumVector, -int16_t(offa));
-            } else {
-                MlasGemmU8X8CopyPackBSse(PanelB, (const uint8_t*)b, ldb, CountN,
-                    CountK, ColumnSumVector, -int16_t(offa));
-            }
+            MlasGemmU8X8CopyPackBSse(PanelB, b, ldb, CountN, CountK,
+                ColumnSumVector, -int16_t(offa), Parameters->BTypeIsSigned);
 
             //
             // Step through each slice of matrix A along the M dimension.
@@ -804,18 +777,12 @@ extern "C" {
 void
 MLASCALL
 MlasGemmU8S8OperationAvx2(
-    const MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock,
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
     size_t M,
     size_t N,
-    size_t K,
     const uint8_t* A,
-    size_t lda,
-    int16_t offa,
     const uint8_t* B,
-    size_t ldb,
-    int16_t offb,
-    int32_t* C,
-    size_t ldc
+    int32_t* C
     )
 /*++
 
@@ -828,30 +795,17 @@ Routine Description:
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
 
     M - Supplies the number of rows of matrix A and matrix C.
 
     N - Supplies the number of columns of matrix B and matrix C.
 
-    K - Supplies the number of columns of matrix A and the number of rows of
-        matrix B.
-
     A - Supplies the address of matrix A.
-
-    lda - Supplies the first dimension of matrix A.
-
-    offa - Supplies the zero point offset of matrix A.
 
     B - Supplies the address of matrix B.
 
-    ldb - Supplies the first dimension of matrix B.
-
-    offb - Supplies the zero point offset of matrix B.
-
     C - Supplies the address of matrix C.
-
-    ldc - Supplies the first dimension of matrix C.
 
 Return Value:
 
@@ -865,11 +819,20 @@ Return Value:
     MLAS_DECLSPEC_ALIGN(int32_t RowSumVector[MLAS_GEMM_U8X8_STRIDEM_AVX2], 16);
     MLAS_DECLSPEC_ALIGN(int32_t ColumnSumVector[MLAS_GEMM_U8X8_STRIDEN_AVX2], 16);
 
+    const size_t K = Parameters->K;
+
+    int16_t offa = Parameters->offa;
+    int16_t offb = int8_t(Parameters->offb);
+
+    const size_t lda = Parameters->lda;
+    const size_t ldb = Parameters->ldb;
+    const size_t ldc = Parameters->ldc;
+
     size_t StrideM = MLAS_GEMM_U8X8_STRIDEM_AVX2;
     size_t StrideN = MLAS_GEMM_U8X8_STRIDEN_AVX2;
     size_t StrideK = MLAS_GEMM_U8X8_STRIDEK_AVX2;
 
-    if (WorkBlock->BTypeIsSigned) {
+    if (Parameters->BTypeIsSigned) {
 
         if (M == 1 && offa == 0 && offb == 0) {
 
@@ -911,7 +874,7 @@ Return Value:
             const int8_t* b = (const int8_t*)B + n + k * ldb;
 
             MlasGemmU8S8CopyPackBAvx2(PanelB, b, ldb, CountN,
-                CountK, ColumnSumVector, -int16_t(offa), WorkBlock->BTypeIsSigned);
+                CountK, ColumnSumVector, -int16_t(offa), Parameters->BTypeIsSigned);
 
             //
             // Step through each slice of matrix A along the M dimension.
@@ -942,19 +905,49 @@ Return Value:
                 int32_t* RowSums = RowSumVector;
                 size_t RowsRemaining = CountM;
 
+                bool ZeroMode = (k == 0);
+                bool PostProcess = (k + CountK == K);
+
                 while (RowsRemaining > 0) {
 
                     size_t RowsHandled;
 
                     RowsHandled = MlasPlatform.GemmU8S8Kernel(pa, PanelB, c,
                         QuadCountK, RowsRemaining, CountN, ldc, RowSums,
-                        ColumnSumVector, DepthValue, k == 0);
+                        ColumnSumVector, DepthValue, ZeroMode);
+
+                    if (PostProcess && Parameters->CTypeIsFloat) {
+
+                        float mult = *(Parameters->Multiplier);
+                        __m128 multv = MlasBroadcastFloat32x4(mult);
+                        for (size_t mm = 0; mm < RowsHandled; mm++) {
+                            size_t nn = CountN;
+                            int32_t* cc = c + mm * ldc;
+                            while (nn >= 4) {
+                                __m128 z = _mm_cvtepi32_ps(_mm_loadu_si128((const __m128i*)(cc)));
+                                z = _mm_mul_ps(z, multv);
+                                _mm_storeu_ps((float*)(cc), z);
+                                cc += 4;
+                                nn -= 4;
+                            }
+                            while (nn > 0) {
+                                *((float*)cc) = float(*cc) * mult;
+                                cc += 1;
+                                nn -= 1;
+                            }
+                        }
+                    }
 
                     RowsRemaining -= RowsHandled;
                     c += ldc * RowsHandled;
                     pa += 4 * QuadCountK * RowsHandled;
                     RowSums += RowsHandled;
                 }
+
+                //
+                //
+                //
+
             }
         }
     }
@@ -963,18 +956,12 @@ Return Value:
 void
 MLASCALL
 MlasGemmU8U8OperationAvx2(
-    const MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock,
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
     size_t M,
     size_t N,
-    size_t K,
     const uint8_t* A,
-    size_t lda,
-    int16_t offa,
     const uint8_t* B,
-    size_t ldb,
-    int16_t offb,
-    int32_t* C,
-    size_t ldc
+    int32_t* C
     )
 /*++
 
@@ -987,30 +974,17 @@ Routine Description:
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
 
     M - Supplies the number of rows of matrix A and matrix C.
 
     N - Supplies the number of columns of matrix B and matrix C.
 
-    K - Supplies the number of columns of matrix A and the number of rows of
-        matrix B.
-
     A - Supplies the address of matrix A.
-
-    lda - Supplies the first dimension of matrix A.
-
-    offa - Supplies the zero point offset of matrix A.
 
     B - Supplies the address of matrix B.
 
-    ldb - Supplies the first dimension of matrix B.
-
-    offb - Supplies the zero point offset of matrix B.
-
     C - Supplies the address of matrix C.
-
-    ldc - Supplies the first dimension of matrix C.
 
 Return Value:
 
@@ -1024,11 +998,18 @@ Return Value:
     MLAS_DECLSPEC_ALIGN(int32_t RowSumVector[MLAS_GEMM_U8X8_STRIDEM_AVX2], 16);
     MLAS_DECLSPEC_ALIGN(int32_t ColumnSumVector[MLAS_GEMM_U8X8_STRIDEN_AVX2], 16);
 
+    const size_t K = Parameters->K;
+
+    int16_t offa = Parameters->offa;
+    int16_t offb = uint8_t(Parameters->offb);
+
+    const size_t lda = Parameters->lda;
+    const size_t ldb = Parameters->ldb;
+    const size_t ldc = Parameters->ldc;
+
     size_t StrideM = MLAS_GEMM_U8X8_STRIDEM_AVX2;
     size_t StrideN = MLAS_GEMM_U8X8_STRIDEN_AVX2;
     size_t StrideK = MLAS_GEMM_U8X8_STRIDEK_AVX2;
-
-    MLAS_UNREFERENCED_PARAMETER(WorkBlock);
 
     //
     // Step through each slice of matrix B along the K dimension.
@@ -1088,13 +1069,38 @@ Return Value:
                 int32_t* RowSums = RowSumVector;
                 size_t RowsRemaining = CountM;
 
+                bool ZeroMode = (k == 0);
+                bool PostProcess = (k + CountK == K);
+
                 while (RowsRemaining > 0) {
 
                     size_t RowsHandled;
 
                     RowsHandled = MlasPlatform.GemmU8U8Kernel(pa, PanelB, c,
                         PairCountK, RowsRemaining, CountN, ldc, RowSums,
-                        ColumnSumVector, DepthValue, k == 0);
+                        ColumnSumVector, DepthValue, ZeroMode);
+
+                    if (PostProcess && Parameters->CTypeIsFloat) {
+
+                        float mult = *(Parameters->Multiplier);
+                        __m128 multv = MlasBroadcastFloat32x4(mult);
+                        for (size_t mm = 0; mm < RowsHandled; mm++) {
+                            size_t nn = CountN;
+                            int32_t* cc = c + mm * ldc;
+                            while (nn >= 4) {
+                                __m128 z = _mm_cvtepi32_ps(_mm_loadu_si128((const __m128i*)(cc)));
+                                z = _mm_mul_ps(z, multv);
+                                _mm_storeu_ps((float*)(cc), z);
+                                cc += 4;
+                                nn -= 4;
+                            }
+                            while (nn > 0) {
+                                *((float*)cc) = float(*cc) * mult;
+                                cc += 1;
+                                nn -= 1;
+                            }
+                        }
+                    }
 
                     c += ldc * RowsHandled;
                     pa += 2 * PairCountK * RowsHandled;
@@ -1146,7 +1152,7 @@ Return Value:
     // Partition the operation along the M dimension.
     //
 
-    size_t M = WorkBlock->M;
+    size_t M = WorkBlock->Parameters->M;
     size_t m;
     size_t CountM;
 
@@ -1156,7 +1162,7 @@ Return Value:
     // Partition the operation along the N dimension.
     //
 
-    size_t N = WorkBlock->N;
+    size_t N = WorkBlock->Parameters->N;
     size_t n;
     size_t CountN;
 
@@ -1176,18 +1182,18 @@ Return Value:
     // Dispatch the partitioned operation.
     //
 
-    const size_t lda = WorkBlock->lda;
-    const size_t ldb = WorkBlock->ldb;
-    const size_t ldc = WorkBlock->ldc;
+    const size_t lda = WorkBlock->Parameters->lda;
+    const size_t ldb = WorkBlock->Parameters->ldb;
+    const size_t ldc = WorkBlock->Parameters->ldc;
 
-    const uint8_t* a = WorkBlock->A + m * lda;
-    const uint8_t* b = WorkBlock->B + n;
-    int32_t* c = WorkBlock->C + n + m * ldc;
+    const uint8_t* a = WorkBlock->Parameters->A + m * lda;
+    const uint8_t* b = WorkBlock->Parameters->B + n;
+    int32_t* c = WorkBlock->Parameters->C + n + m * ldc;
 
     PMLAS_GEMM_U8X8_OPERATION GemmU8X8Operation;
 
 #if defined(MLAS_TARGET_AMD64)
-    if (WorkBlock->BTypeIsSigned) {
+    if (WorkBlock->Parameters->BTypeIsSigned) {
         GemmU8X8Operation = MlasPlatform.GemmU8S8Operation;
     } else {
         GemmU8X8Operation = MlasPlatform.GemmU8U8Operation;
@@ -1196,8 +1202,7 @@ Return Value:
     GemmU8X8Operation = MlasGemmU8X8OperationSse;
 #endif
 
-    GemmU8X8Operation(WorkBlock, CountM, CountN, WorkBlock->K, a, lda,
-        WorkBlock->offa, b, ldb, WorkBlock->offb, c, ldc);
+    GemmU8X8Operation(WorkBlock->Parameters, CountM, CountN, a, b, c);
 }
 
 void
@@ -1225,9 +1230,9 @@ Return Value:
 
 --*/
 {
-    const size_t M = WorkBlock->M;
-    const size_t N = WorkBlock->N;
-    const size_t K = WorkBlock->K;
+    const size_t M = WorkBlock->Parameters->M;
+    const size_t N = WorkBlock->Parameters->N;
+    const size_t K = WorkBlock->Parameters->K;
 
     //
     // Compute the number of target threads given the complexity of the SGEMM
@@ -1280,6 +1285,20 @@ Return Value:
     }
 
     MlasExecuteThreaded(MlasGemmU8X8Threaded, WorkBlock, TargetThreadCount, ThreadPool);
+}
+
+void
+MLASCALL
+MlasGemm(
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
+    MLAS_THREADPOOL* ThreadPool
+    )
+{
+    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
+
+    WorkBlock.Parameters = Parameters;
+
+    MlasGemmU8X8Schedule(&WorkBlock, ThreadPool);
 }
 
 template<typename AType, typename BType>
@@ -1340,28 +1359,32 @@ Return Value:
 
 --*/
 {
-    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
+    MLAS_GEMM_U8X8_PARAMETERS Parameters = { };
 
     //
     // Capture the GEMM parameters to the work block.
     //
 
-    WorkBlock.M = M;
-    WorkBlock.N = N;
-    WorkBlock.K = K;
-    WorkBlock.A = A;
-    WorkBlock.lda = lda;
-    WorkBlock.B = (const uint8_t*)B;
-    WorkBlock.ldb = ldb;
-    WorkBlock.C = C;
-    WorkBlock.ldc = ldc;
-    WorkBlock.offa = int16_t(offa);
-    WorkBlock.offb = int16_t(offb);
-    WorkBlock.BTypeIsSigned = std::is_signed<BType>::value;
+    Parameters.M = M;
+    Parameters.N = N;
+    Parameters.K = K;
+    Parameters.A = A;
+    Parameters.lda = lda;
+    Parameters.B = (const uint8_t*)B;
+    Parameters.ldb = ldb;
+    Parameters.C = C;
+    Parameters.ldc = ldc;
+    Parameters.offa = uint8_t(offa);
+    Parameters.offb = uint8_t(offb);
+    Parameters.BTypeIsSigned = std::is_signed<BType>::value;
 
     //
     // Schedule the operation across a set of worker threads.
     //
+
+    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
+
+    WorkBlock.Parameters = &Parameters;
 
     MlasGemmU8X8Schedule(&WorkBlock, ThreadPool);
 }

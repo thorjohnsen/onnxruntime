@@ -248,18 +248,12 @@ typedef MLAS_SGEMM_TRANSPOSE_PACKB_BLOCK_ROUTINE* PMLAS_SGEMM_TRANSPOSE_PACKB_BL
 typedef
 void
 (MLASCALL MLAS_GEMM_U8X8_OPERATION)(
-    const struct MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock,
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
     size_t M,
     size_t N,
-    size_t K,
     const uint8_t* A,
-    size_t lda,
-    int16_t offa,
     const uint8_t* B,
-    size_t ldb,
-    int16_t offb,
-    int32_t* C,
-    size_t ldc
+    int32_t* C
     );
 
 typedef MLAS_GEMM_U8X8_OPERATION* PMLAS_GEMM_U8X8_OPERATION;
@@ -334,7 +328,7 @@ void
     size_t OutputCount,
     size_t OutputCountRightPad,
     const float* Bias,
-    unsigned Flags
+    unsigned KernelFlags
     );
 
 typedef MLAS_CONV_FLOAT_KERNEL* PMLAS_CONV_FLOAT_KERNEL;
@@ -357,7 +351,7 @@ void
     size_t OutputCount,
     size_t OutputCountRightPad,
     const float* Bias,
-    unsigned Flags
+    unsigned KernelFlags
     );
 
 typedef MLAS_CONV_DEPTHWISE_FLOAT_KERNEL* PMLAS_CONV_DEPTHWISE_FLOAT_KERNEL;
@@ -376,7 +370,7 @@ void
     size_t OutputStride,
     size_t OutputCount,
     const float* Bias,
-    unsigned Flags
+    unsigned KernelFlags
     );
 
 typedef MLAS_CONV_POINTWISE_FLOAT_KERNEL* PMLAS_CONV_POINTWISE_FLOAT_KERNEL;
@@ -753,8 +747,6 @@ MlasPartitionWork(
 #if defined(__FMA__) || (defined(_MSC_VER) && defined(__AVX2__))
 #define MLAS_FMA3_INTRINSICS
 #endif
-#else
-#error Unsupported architecture.
 #endif
 
 #if defined(MLAS_NEON_INTRINSICS)
@@ -795,6 +787,145 @@ MlasBroadcastInt32x4(int32_t Value)
     return _mm_set1_epi32(Value);
 #else
     return MLAS_INT32X4{Value, Value, Value, Value};
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasAddInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vaddq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_add_epi32(Vector1, Vector2);
+#else
+    return Vector1 + Vector2;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasSubtractInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vsubq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_sub_epi32(Vector1, Vector2);
+#else
+    return Vector1 - Vector2;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasAndInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vandq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_and_si128(Vector1, Vector2);
+#else
+    return Vector1 & Vector2;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasOrInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vorrq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_or_si128(Vector1, Vector2);
+#else
+    return Vector1 | Vector2;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasAndNotInt32x4(MLAS_INT32X4 VectorNot, MLAS_INT32X4 Vector)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vandq_s32(vmvnq_s32(VectorNot), Vector);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_andnot_si128(VectorNot, Vector);
+#else
+    return (~VectorNot) & Vector;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasXorInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return veorq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_xor_si128(Vector1, Vector2);
+#else
+    return Vector1 ^ Vector2;
+#endif
+}
+
+template<unsigned ShiftCount>
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasShiftLeftInt32x4(MLAS_INT32X4 Vector)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vshlq_n_s32(Vector, ShiftCount);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_slli_epi32(Vector, ShiftCount);
+#else
+    return Vector << ShiftCount;
+#endif
+}
+
+#if !defined(MLAS_SSE2_INTRINSICS) || defined(MLAS_SSE41_INTRINSICS)
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasMaximumInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vmaxq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE41_INTRINSICS)
+    return _mm_max_epi32(Vector1, Vector2);
+#elif defined(MLAS_VSX_INTRINSICS)
+    return vec_vmaxsw(Vector1, Vector2);
+#else
+#error Unsupported architecture.
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_INT32X4
+MlasMinimumInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vminq_s32(Vector1, Vector2);
+#elif defined(MLAS_SSE41_INTRINSICS)
+    return _mm_min_epi32(Vector1, Vector2);
+#elif defined(MLAS_VSX_INTRINSICS)
+    return vec_vminsw(Vector1, Vector2);
+#else
+#error Unsupported architecture.
+#endif
+}
+
+#endif
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasReinterpretAsFloat32x4(MLAS_INT32X4 Vector)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vreinterpretq_f32_s32(Vector);
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_castsi128_ps(Vector);
+#else
+    return MLAS_FLOAT32X4(Vector);
 #endif
 }
 
@@ -847,6 +978,8 @@ MlasLoadFloat32x4(const float* Buffer)
     return _mm_loadu_ps(Buffer);
 #elif defined(MLAS_VSX_INTRINSICS)
     return vec_vsx_ld(0, Buffer);
+#else
+    return *((MLAS_FLOAT32X4*)Buffer);
 #endif
 }
 
@@ -860,6 +993,8 @@ MlasStoreFloat32x4(float* Buffer, MLAS_FLOAT32X4 Vector)
     _mm_storeu_ps(Buffer, Vector);
 #elif defined(MLAS_VSX_INTRINSICS)
     vec_vsx_st(Vector, 0, Buffer);
+#else
+    *((MLAS_FLOAT32X4*)Buffer) = Vector;
 #endif
 }
 
@@ -1038,6 +1173,70 @@ MlasDivideFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
 
 MLAS_FORCEINLINE
 MLAS_FLOAT32X4
+MlasGreaterThanFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
+{
+#if defined(MLAS_NEON_INTRINSICS)
+    return vreinterpretq_f32_s32(vcgtq_f32(Vector1, Vector2));
+#elif defined(MLAS_SSE2_INTRINSICS)
+    return _mm_cmpgt_ps(Vector1, Vector2);
+#else
+    return Vector1 > Vector2;
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasAndFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
+{
+#if defined(MLAS_SSE2_INTRINSICS)
+    return _mm_and_ps(Vector1, Vector2);
+#else
+    return MlasReinterpretAsFloat32x4(MlasAndInt32x4(MlasReinterpretAsInt32x4(Vector1), MlasReinterpretAsInt32x4(Vector2)));
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasOrFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
+{
+#if defined(MLAS_SSE2_INTRINSICS)
+    return _mm_or_ps(Vector1, Vector2);
+#else
+    return MlasReinterpretAsFloat32x4(MlasOrInt32x4(MlasReinterpretAsInt32x4(Vector1), MlasReinterpretAsInt32x4(Vector2)));
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasAndNotFloat32x4(MLAS_FLOAT32X4 VectorNot, MLAS_FLOAT32X4 Vector)
+{
+#if defined(MLAS_SSE2_INTRINSICS)
+    return _mm_andnot_ps(VectorNot, Vector);
+#else
+    return MlasReinterpretAsFloat32x4(MlasAndNotInt32x4(MlasReinterpretAsInt32x4(VectorNot), MlasReinterpretAsInt32x4(Vector)));
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasXorFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
+{
+#if defined(MLAS_SSE2_INTRINSICS)
+    return _mm_xor_ps(Vector1, Vector2);
+#else
+    return MlasReinterpretAsFloat32x4(MlasXorInt32x4(MlasReinterpretAsInt32x4(Vector1), MlasReinterpretAsInt32x4(Vector2)));
+#endif
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
+MlasBlendFloat32x4(MLAS_FLOAT32X4 Selection, MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
+{
+    return MlasOrFloat32x4(MlasAndFloat32x4(Vector1, Selection), MlasAndNotFloat32x4(Vector2, Selection));
+}
+
+MLAS_FORCEINLINE
+MLAS_FLOAT32X4
 MlasMaximumFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
 {
 #if defined(MLAS_NEON_INTRINSICS)
@@ -1047,7 +1246,7 @@ MlasMaximumFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
 #elif defined(MLAS_VSX_INTRINSICS)
     return vec_sel(Vector2, Vector1, vec_cmpgt(Vector1, Vector2));
 #else
-#error Unsupported architecture.
+    return MlasBlendFloat32x4(Vector1 > Vector2, Vector1, Vector2);
 #endif
 }
 
@@ -1062,7 +1261,7 @@ MlasMinimumFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
 #elif defined(MLAS_VSX_INTRINSICS)
     return vec_sel(Vector2, Vector1, vec_cmpgt(Vector2, Vector1));
 #else
-#error Unsupported architecture.
+    return MlasBlendFloat32x4(Vector2 > Vector1, Vector1, Vector2);
 #endif
 }
 
@@ -1077,86 +1276,6 @@ MlasClampFloat32x4(MLAS_FLOAT32X4 Value, float LowerRange, float UpperRange)
     Value = MlasMaximumFloat32x4(MlasBroadcastFloat32x4(LowerRange), Value);
     Value = MlasMinimumFloat32x4(MlasBroadcastFloat32x4(UpperRange), Value);
     return Value;
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasGreaterThanFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_u32(vcgtq_f32(Vector1, Vector2));
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_cmpgt_ps(Vector1, Vector2);
-#elif defined(MLAS_VSX_INTRINSICS)
-    return MLAS_FLOAT32X4(vec_cmpgt(Vector1, Vector2));
-#else
-#error Unsupported architecture.
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasAndFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(Vector1), vreinterpretq_u32_f32(Vector2)));
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_and_ps(Vector1, Vector2);
-#else
-    return MLAS_FLOAT32X4(MLAS_INT32X4(Vector1) & MLAS_INT32X4(Vector2));
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasOrFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_u32(vorrq_u32(vreinterpretq_u32_f32(Vector1), vreinterpretq_u32_f32(Vector2)));
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_or_ps(Vector1, Vector2);
-#else
-    return MLAS_FLOAT32X4(MLAS_INT32X4(Vector1) | MLAS_INT32X4(Vector2));
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasAndNotFloat32x4(MLAS_FLOAT32X4 VectorNot, MLAS_FLOAT32X4 Vector)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_u32(vandq_u32(vmvnq_u32(vreinterpretq_u32_f32(VectorNot)), vreinterpretq_u32_f32(Vector)));
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_andnot_ps(VectorNot, Vector);
-#else
-    return MLAS_FLOAT32X4(~MLAS_INT32X4(VectorNot) & MLAS_INT32X4(Vector));
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasXorFloat32x4(MLAS_FLOAT32X4 Vector1, MLAS_FLOAT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(Vector1), vreinterpretq_u32_f32(Vector2)));
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_xor_ps(Vector1, Vector2);
-#else
-    return MLAS_FLOAT32X4(MLAS_INT32X4(Vector1) ^ MLAS_INT32X4(Vector2));
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_FLOAT32X4
-MlasReinterpretAsFloat32x4(MLAS_INT32X4 Vector)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vreinterpretq_f32_s32(Vector);
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_castsi128_ps(Vector);
-#else
-    return MLAS_FLOAT32X4(Vector);
-#endif
 }
 
 MLAS_FORCEINLINE
@@ -1210,80 +1329,6 @@ MlasReduceMaximumFloat32x4(MLAS_FLOAT32X4 Vector)
 #error Unsupported architecture.
 #endif
 }
-
-MLAS_FORCEINLINE
-MLAS_INT32X4
-MlasAddInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vaddq_s32(Vector1, Vector2);
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_add_epi32(Vector1, Vector2);
-#else
-    return Vector1 + Vector2;
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_INT32X4
-MlasSubtractInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vsubq_s32(Vector1, Vector2);
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_sub_epi32(Vector1, Vector2);
-#else
-    return Vector1 - Vector2;
-#endif
-}
-
-template<unsigned ShiftCount>
-MLAS_FORCEINLINE
-MLAS_INT32X4
-MlasShiftLeftInt32x4(MLAS_INT32X4 Vector)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vshlq_n_s32(Vector, ShiftCount);
-#elif defined(MLAS_SSE2_INTRINSICS)
-    return _mm_slli_epi32(Vector, ShiftCount);
-#else
-    return Vector << ShiftCount;
-#endif
-}
-
-#if !defined(MLAS_SSE2_INTRINSICS) || defined(MLAS_SSE41_INTRINSICS)
-
-MLAS_FORCEINLINE
-MLAS_INT32X4
-MlasMaximumInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vmaxq_s32(Vector1, Vector2);
-#elif defined(MLAS_SSE41_INTRINSICS)
-    return _mm_max_epi32(Vector1, Vector2);
-#elif defined(MLAS_VSX_INTRINSICS)
-    return vec_vmaxsw(Vector1, Vector2);
-#else
-#error Unsupported architecture.
-#endif
-}
-
-MLAS_FORCEINLINE
-MLAS_INT32X4
-MlasMinimumInt32x4(MLAS_INT32X4 Vector1, MLAS_INT32X4 Vector2)
-{
-#if defined(MLAS_NEON_INTRINSICS)
-    return vminq_s32(Vector1, Vector2);
-#elif defined(MLAS_SSE41_INTRINSICS)
-    return _mm_min_epi32(Vector1, Vector2);
-#elif defined(MLAS_VSX_INTRINSICS)
-    return vec_vminsw(Vector1, Vector2);
-#else
-#error Unsupported architecture.
-#endif
-}
-
-#endif
 
 // calc 2^int(N)
 MLAS_FORCEINLINE
