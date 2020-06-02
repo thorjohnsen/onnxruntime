@@ -30,6 +30,7 @@ using onnxruntime::Status;
 #endif
 #include <core/platform/thread_pool_interface.h>
 #include <core/platform/EigenNonBlockingThreadPool.h>
+extern const OrtApi* c_api;
 
 
 using DefaultThreadPoolType = onnxruntime::ThreadPoolTempl<onnxruntime::Env>;
@@ -106,39 +107,7 @@ Status PerformanceRunner::RepeatedTimesTest() {
 }
 
 Status PerformanceRunner::RunParallelDuration() {
-  // Simple method to continually queue parallel work until the timer has run down.
-  // TODO: Make each thread enqueue a new worker.
-  auto tpool = GetDefaultThreadPool(Env::Default());
-  std::atomic<int> counter = {0};
-  std::mutex m;
-  std::condition_variable cv;
-
-  auto start = std::chrono::high_resolution_clock::now();
-  auto end = start;
-  std::chrono::duration<double> duration_seconds;
-  do {
-    // We will queue work as deep as requested, ignoring the size of the threadpool itself
-    int count = counter.load(std::memory_order_seq_cst);
-    while (count < static_cast<int>(performance_test_config_.run_config.concurrent_session_runs)) {
-      count++;
-      counter++;
-      tpool->Schedule([this, &counter, &m, &cv]() {
-        session_->ThreadSafeRun();
-        // Simplified version of Eigen::Barrier
-        std::lock_guard<std::mutex> lg(m);
-        counter--;
-        cv.notify_all();
-      });
-    }
-    end = std::chrono::high_resolution_clock::now();
-    duration_seconds = end - start;
-  } while (duration_seconds.count() < performance_test_config_.run_config.duration_in_seconds);
-
-  //Join
-  std::unique_lock<std::mutex> lock(m);
-  cv.wait(lock, [&counter]() { return counter == 0; });
-
-  return Status::OK();
+  abort();
 }
 
 Status PerformanceRunner::ForkJoinRepeat() {
@@ -190,7 +159,7 @@ static TestSession* CreateSession(Ort::Env& env, std::random_device& rd,
                                   const PerformanceTestConfig& performance_test_config_,
                                   TestModelInfo* test_model_info) {
   if (CompareCString(performance_test_config_.backend.c_str(), ORT_TSTR("ort")) == 0) {
-    return new OnnxRuntimeTestSession(env, rd, performance_test_config_, test_model_info);
+    abort();
   }
 #ifdef HAVE_TENSORFLOW
   if (CompareCString(performance_test_config_.backend.c_str(), ORT_TSTR("tf")) == 0) {
@@ -199,56 +168,20 @@ static TestSession* CreateSession(Ort::Env& env, std::random_device& rd,
 #endif
   ORT_NOT_IMPLEMENTED(ToMBString(performance_test_config_.backend), " is not supported");
 }
+
+static OrtSession* sess{nullptr};
+
 PerformanceRunner::PerformanceRunner(Ort::Env& env, const PerformanceTestConfig& test_config, std::random_device& rd)
     : performance_test_config_(test_config),
       test_model_info_(CreateModelInfo(test_config)) {
   session_create_start_ = std::chrono::high_resolution_clock::now();
-  session_.reset(CreateSession(env, rd, test_config, test_model_info_));
+  sess = CreateOrtSession(env,test_config);
   session_create_end_ = std::chrono::high_resolution_clock::now();
 }
 
 PerformanceRunner::~PerformanceRunner() = default;
 
- class OrtSystemUnderTest: public mlperf::SystemUnderTest {
-  private:
-   const std::string name_  = "onnxruntime";
- public:
 
-  /// \brief A human-readable string for logging purposes.
-  const std::string& Name() const override {
-    return name_;
-  }
-
-  /// \brief Lets the loadgen issue N samples to the SUT.
-  /// \details The SUT may either a) return immediately and signal completion
-  /// at a later time on another thread or b) it may block and signal
-  /// completion on the current stack. The load generator will handle both
-  /// cases properly.
-  /// Note: The data for neighboring samples may or may not be contiguous
-  /// depending on the scenario.
-  void IssueQuery(const std::vector<mlperf::QuerySample>& samples) override {
-    abort();
-  }
-
-  /// \brief Called immediately after the last call to IssueQuery
-  /// in a series is made.
-  /// \details This doesn't necessarily signify the end of the
-  /// test since there may be multiple series involved during a test; for
-  /// example in accuracy mode.
-  /// Clients can use this to flush any deferred queries immediately, rather
-  /// than waiting for some timeout.
-  /// This is especially useful in the server scenario.
-  void FlushQueries() {
-    abort();
-  }
-
-  /// \brief Reports the raw latency results to the SUT of each sample issued as
-  /// recorded by the load generator. Units are nanoseconds.
-  void ReportLatencyResults(
-      const std::vector<mlperf::QuerySampleLatency>& latencies_ns) {
-    abort();
-  }
-};
 
 bool PerformanceRunner::Initialize() {
   std::basic_string<PATH_CHAR_TYPE> test_case_dir;
@@ -278,50 +211,19 @@ bool PerformanceRunner::Initialize() {
     std::cout << "there is no test data for model " << test_case_->GetTestCaseName() << std::endl;
     return false;
   }
-  for (size_t test_data_id = 0; test_data_id != test_data_count; ++test_data_id) {
-    std::unordered_map<std::string, OrtValue*> feeds;
-    test_case_->LoadTestData(test_data_id /* id */, b_, feeds, true);
-    // Discard the names in feeds
-    int input_count = test_model_info_->GetInputCount();
-    for (int i = 0; i != input_count; ++i) {
-      auto iter = feeds.find(test_model_info_->GetInputName(i));
-      if (iter == feeds.end()) {
-        std::cout << "there is no test input data for input " << test_model_info_->GetInputName(i) << " and model "
-                  << test_case_->GetTestCaseName() << std::endl;
-        return false;
-      }
-      session_->PreLoadTestData(test_data_id, static_cast<size_t>(i), iter->second);
-    }
-  }
-  SampleLoader s(test_case_.get());
-  OrtSystemUnderTest sut;
+
+  std::random_device rd;
+  SampleLoader s(sess,test_case_.get());
+  session_.reset(new OnnxRuntimeTestSession(sess, &s, rd));
+
   mlperf::TestSettings test_settings;
   mlperf::LogSettings log_settings;
-  mlperf::StartTest(&sut,&s,test_settings,log_settings);
+  mlperf::StartTest(session_.get(),&s,test_settings,log_settings);
   //test_case_.reset(nullptr);
   test_model_info_ = nullptr;
   return true;
 }
 
-const std::string &SampleLoader::Name() const {
-  return test_case_->GetTestCaseName();
-}
-size_t SampleLoader::TotalSampleCount() {
-  return test_case_->GetDataCount();
-}
-size_t SampleLoader::PerformanceSampleCount() {
-  return test_case_->GetDataCount();
-}
-void SampleLoader::LoadSamplesToRam(const std::vector<mlperf::QuerySampleIndex> &samples) {
-
-}
-void SampleLoader::UnloadSamplesFromRam(const std::vector<mlperf::QuerySampleIndex> &samples) {
-
-}
-
-SampleLoader::SampleLoader(ITestCase* test_case):test_case_(test_case){
-
-}
 }  // namespace perftest
 
 }  // namespace onnxruntime

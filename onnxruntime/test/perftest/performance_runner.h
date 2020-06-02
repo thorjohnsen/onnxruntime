@@ -32,23 +32,6 @@ class TestModelInfo;
 namespace onnxruntime {
 namespace perftest {
 
-class SampleLoader : public mlperf::QuerySampleLibrary {
- private:
-  ITestCase* test_case_;
-
- public:
-  explicit SampleLoader(ITestCase* test_case);
-
-  const std::string& Name() const override;
-
-  size_t TotalSampleCount() override;
-
-  size_t PerformanceSampleCount() override;
-
-  void LoadSamplesToRam(const std::vector<mlperf::QuerySampleIndex>& samples) override;
-
-  void UnloadSamplesFromRam(const std::vector<mlperf::QuerySampleIndex>& samples) override;
-};
 struct PerformanceResult {
   std::chrono::time_point<std::chrono::high_resolution_clock> start_;
   std::chrono::time_point<std::chrono::high_resolution_clock> end_;
@@ -124,24 +107,7 @@ class PerformanceRunner {
 
   template <bool isWarmup>
   Status RunOneIteration() {
-    std::chrono::duration<double> duration_seconds;
-
-    try {
-      duration_seconds = session_->Run();
-    } catch (const std::exception& ex) {
-      return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "PerformanceRunner::RunOneIteration caught exception: ", ex.what());
-    }
-
-    if (!isWarmup) {
-      std::lock_guard<std::mutex> guard(results_mutex_);
-      performance_result_.time_costs.emplace_back(duration_seconds.count());
-      performance_result_.total_time_cost += duration_seconds.count();
-      if (performance_test_config_.run_config.f_verbose) {
-        std::cout << "iteration:" << performance_result_.time_costs.size() << ","
-                  << "time_cost:" << performance_result_.time_costs.back() << std::endl;
-      }
-    }
-    return Status::OK();
+   abort();
   }
 
   Status FixDurationTest();
@@ -169,7 +135,7 @@ class PerformanceRunner {
   PerformanceResult performance_result_;
   PerformanceTestConfig performance_test_config_;
   TestModelInfo* test_model_info_;
-  std::unique_ptr<TestSession> session_;
+  std::unique_ptr<mlperf::SystemUnderTest> session_;
   onnxruntime::test::HeapBuffer b_;
   std::unique_ptr<ITestCase> test_case_;
 
