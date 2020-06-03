@@ -1529,7 +1529,6 @@ TEST(GradientCheckerTest, DISABLED_Dropout) {
 }
 
 TEST(GradientCheckerTest, DISABLED_DropoutGrad) {
-
   {
     //Ratio 0
     TensorShape x_shape({8, 2});
