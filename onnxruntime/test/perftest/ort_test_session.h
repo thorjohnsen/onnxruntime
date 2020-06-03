@@ -2,7 +2,9 @@
 // Licensed under the MIT License.
 
 #pragma once
-#include <core/session/onnxruntime_cxx_api.h>
+#include <core/session/onnxruntime_c_api.h>
+#include "core/platform/env.h"
+#include <core/platform/EigenNonBlockingThreadPool.h>
 #include <random>
 #include "test_configuration.h"
 #include "heap_buffer.h"
@@ -12,6 +14,8 @@
 #include "query_sample.h"
 #include "system_under_test.h"
 #include "query_sample_library.h"
+#include "performance_result.h"
+
 class ITestCase;
 namespace onnxruntime {
 
@@ -46,10 +50,7 @@ class SampleLoader : public mlperf::QuerySampleLibrary {
 
 class OnnxRuntimeTestSession : public mlperf::SystemUnderTest {
  public:
-  OnnxRuntimeTestSession(OrtSession* sess, SampleLoader* sample_loader, std::random_device& rd);
-
-
-  bool PopulateGeneratedInputTestData();
+  OnnxRuntimeTestSession(OrtSession* sess, SampleLoader* sample_loader, std::random_device& rd, size_t concurrent_session_runs);
 
   ~OnnxRuntimeTestSession() override {
     for (char* p : input_names_) {
@@ -81,33 +82,40 @@ class OnnxRuntimeTestSession : public mlperf::SystemUnderTest {
   /// than waiting for some timeout.
   /// This is especially useful in the server scenario.
   void FlushQueries() override {
-    abort();
+
   }
 
   /// \brief Reports the raw latency results to the SUT of each sample issued as
   /// recorded by the load generator. Units are nanoseconds.
   void ReportLatencyResults(
       const std::vector<mlperf::QuerySampleLatency>& latencies_ns) override {
-    abort();
+    for(const mlperf::QuerySampleLatency& l:latencies_ns){
+      performance_result_.time_costs.emplace_back(l);
+      performance_result_.total_time_cost += l;
+    }
   }
   ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(OnnxRuntimeTestSession);
-
+  const perftest::PerformanceResult& GetPerformanceResult() const{
+    return performance_result_;
+  }
  private:
   const std::string name_  = "onnxruntime";
   OrtSession* sess_;
   SampleLoader* sample_loader_;
   std::mt19937 rand_engine_;
   std::uniform_int_distribution<int> dist_;
-  std::vector<std::vector<Ort::Value>> test_inputs_;
   std::vector<std::string> output_names_;
   // The same size with output_names_.
   // TODO: implement a customized allocator, then we can remove output_names_ to simplify this code
   std::vector<const char*> output_names_raw_ptr;
   std::vector<char*> input_names_;
   size_t input_length_;
+  perftest::PerformanceResult performance_result_;
+  onnxruntime::ThreadOptions thread_options_;
+  std::unique_ptr<onnxruntime::ThreadPoolTempl<onnxruntime::Env> > eigen_threadpool_;
 };
 
-OrtSession* CreateOrtSession(Ort::Env& env,
+OrtSession* CreateOrtSession(OrtEnv* env,
                              const PerformanceTestConfig& performance_test_config);
 
 }  // namespace perftest
