@@ -45,7 +45,8 @@ REGISTER_TRAINABLE_KERNEL_TYPED(double, double)
           .TypeConstraint("T", DataTypeImpl::GetTensorType<T1>())    \
           .TypeConstraint("T1", DataTypeImpl::GetTensorType<T2>())   \
           .TypeConstraint("T2", DataTypeImpl::GetTensorType<bool>()) \
-          .InputMemoryType<OrtMemTypeCPUInput>(2),                   \
+          .InputMemoryType<OrtMemTypeCPUInput>(2)                    \
+          .InputMemoryType<OrtMemTypeCPUInput>(3),                   \
       DropoutGrad<T1, T2>);
 
 REGISTER_GRADIENT_KERNEL_TYPED(DropoutGrad, MLFloat16, MLFloat16)
@@ -90,7 +91,6 @@ Status DropoutGrad<T1, T2>::ComputeInternal(OpKernelContext* context) const {
   auto training_mode = context->Input<Tensor>(3); // optional
   bool training_mode_data = false;
   if (training_mode){
-    std::cout << "CUDA DROPOUT BEFORE tensor->template Data<bool>() call" << std::endl;
     ORT_ENFORCE(training_mode->Shape().Size() == 1);
     training_mode_data = *(training_mode->template Data<bool>());
   }
@@ -106,7 +106,6 @@ Status DropoutGrad<T1, T2>::ComputeInternal(OpKernelContext* context) const {
   ORT_ENFORCE(ratio_data >= 0.0f && ratio_data < 1.0f);
 
   const bool* mask_data = mask->template Data<bool>();
-  std::cout << "CUDA DROPOUT: " << training_mode_data << std::endl;
   DropoutGradientKernelImpl(N, dY_data, mask_data, ratio_data, training_mode_data, dX_data);
 
   return Status::OK();

@@ -1493,7 +1493,7 @@ void TestDropoutGradOp(float ratio, TensorShape& x_shape, bool default_ratio = t
   if (!default_ratio) {
     test.AddInput<float>("ratio", {1}, ratio_data);
   } else {
-    test.AddMissingOptionalInput<bool>();
+    test.AddMissingOptionalInput<float>();
   }
 
   test.AddInput("training_mode", {}, {true});
