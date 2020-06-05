@@ -807,7 +807,7 @@ if (onnxruntime_USE_CUDA)
     string(APPEND CMAKE_CUDA_FLAGS "-cudart shared")
   endif()
   enable_language(CUDA)
-  set(CMAKE_CUDA_STANDARD 11)
+  set(CMAKE_CUDA_STANDARD 14)
   file(TO_CMAKE_PATH ${onnxruntime_CUDNN_HOME} onnxruntime_CUDNN_HOME)
   set(ONNXRUNTIME_CUDA_LIBRARIES ${CUDA_LIBRARIES})
 
