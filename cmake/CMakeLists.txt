@@ -853,7 +853,7 @@ if (onnxruntime_USE_CUDA)
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_60,code=sm_60") # P series
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_70,code=sm_70") # V series
   foreach(f ${SOURCES})
-      if(f NOT topk_impl.cu)
+      if(f NOT onnxruntime/core/providers/cuda/math/topk_impl.cu)
           set_source_files_properties(f CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_80,code=sm_80") # A series
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr --default-stream legacy")
   if (NOT WIN32)
