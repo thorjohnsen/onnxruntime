@@ -810,6 +810,7 @@ if (onnxruntime_USE_CUDA)
   endif()
   list(APPEND onnxruntime_EXTERNAL_LIBRARIES ${ONNXRUNTIME_CUDA_LIBRARIES})
 
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -v")
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_60,code=sm_60") # P series
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_70,code=sm_70") # V series
   if (CUDA_VERSION_MAJOR VERSION_GREATER_EQUAL 11)
